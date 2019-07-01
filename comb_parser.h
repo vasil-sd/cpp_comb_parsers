@@ -4,18 +4,17 @@
 #include <functional>
 #include "charset.h"
 
+// TODO think about contexted parsers
+
 namespace comb_parser {
 
 using result = std::function<void(void)>;
 
+const result success{[]{}};
+const result fail;
+
 template<typename Char = char, typename Iter = const char*>
 class parser : public std::function<std::function<void(void)>(Iter& pos, Iter end)> {
-public:
-
-    static const result success;
-    static const result fail;
-
-private:
 
     using parserFn = std::function<result(Iter& pos, Iter end)>;
     const parserFn parser_fn;
@@ -71,7 +70,7 @@ public:
         if (r) {
           auto new_pos = start;
           auto rp = process(new_pos, pos);
-          if (rp) { return [=]{rp();r();}; }
+          if (rp) { return [=]{r();rp();}; }
           pos = start;
         }
         return fail;
@@ -186,13 +185,30 @@ public:
         return fail;
       });
     }
+
+private:
+    template<typename T>
+    using converter_fn = std::function<T(Iter pos, Iter end)>;
+
+public:
+    template<typename T>
+    class converter{
+    private:
+      converter_fn<T> conv_fn;
+      converter(converter_fn<T> c) : conv_fn(c) { }
+      friend class parser;
+    public:
+      const parser operator%(std::function<result(T)> process) const {
+        return parser([=, c=conv_fn](Iter& pos, Iter end)->result{
+          return process(c(pos, end));
+        });
+      }
+    };
+
+    template<typename T, typename L>
+    static const converter<T> make_converter(L conv) {
+      return converter<T>{static_cast<converter_fn<T>>(conv)};
+    }
 };
-
-template<typename Char, typename Iter>
-const result parser<Char, Iter>::success{[]{}};
-
-template<typename Char, typename Iter>
-const result parser<Char, Iter>::fail;
-
 
 }

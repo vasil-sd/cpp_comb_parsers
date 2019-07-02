@@ -3,8 +3,11 @@
 #include <array>
 #include <functional>
 #include "charset.h"
+#include <tuple>
 
 // TODO: think about contexted parsers: combination of contexts?
+// as an idea: list of nil and cons type constructors
+// nil as default type arg for context-less parser
 
 namespace comb_parser {
 
@@ -29,16 +32,19 @@ const typename converter_result<T>::type converter_result<T>::fail;
 namespace {
 
 template<typename...Args>
-struct first_arg{
+struct first_arg {
   using type = void;
 };
 
 template<typename Ctx, typename...Args>
-struct first_arg<Ctx, Args...>{
+struct first_arg<Ctx, Args...> {
   using type = Ctx;
 };
 
 }
+
+template<typename T, typename Char, typename Iter, typename ...Args>
+class converter;
 
 template<typename Char = char, typename Iter = const char*, typename ...Args>
 class parser : public std::function<result(Iter& pos, Iter end, Args...)> {
@@ -51,6 +57,7 @@ class parser : public std::function<result(Iter& pos, Iter end, Args...)> {
     parser(parserFn&& p) : parser_fn(std::move(p)) { }
 
     template<typename, typename, typename...> friend class parser;
+    template<typename, typename, typename, typename...> friend class converter;
 public:
 
     template<typename Ctx>
@@ -231,29 +238,43 @@ public:
       });
     }
 
-private:
-    template<typename T>
-    using converter_fn = std::function<typename converter_result<T>::type(Iter pos, Iter end)>;
 
 public:
     template<typename T>
-    class converter{
-    private:
-      converter_fn<T> conv_fn;
-      converter(converter_fn<T> c) : conv_fn(c) { }
-      friend class parser;
-    public:
-      const parser operator%(std::function<result(typename converter_result<T>::type, Args...)> process) const {
-        return parser([=, c=conv_fn](Iter& pos, Iter end, Args...args)->result{
-          return process(c(pos, end), args...);
-        });
-      }
-    };
+    using converter_type = converter<T, Char, Iter, Args...>;
 
     template<typename T, typename L>
-    static const converter<T> make_converter(L conv) {
-      return converter<T>{static_cast<converter_fn<T>>(conv)};
+    static const converter_type<T> make_converter(L conv) {
+      return converter_type<T>{static_cast<typename converter_type<T>::converter_fn>(conv)};
     }
+
+    template<typename T, typename ...NewArgs>
+    static const converter_type<T> from_converter(const converter<T, Char, Iter, NewArgs...> conv) {
+       return converter_type<T>{conv.conv_fn};
+    }
+
 };
+
+template<typename T, typename Char, typename Iter, typename ...Args>
+class converter{
+private:
+  using converter_fn = std::function<typename converter_result<T>::type(Iter pos, Iter end)>;
+
+  converter_fn conv_fn;
+  converter(converter_fn c) : conv_fn(c) { }
+  template<typename, typename, typename...> friend class parser;
+
+public:
+
+  using parser_type = parser<Char, Iter, Args...>;
+
+  const parser_type operator%(std::function<result(typename converter_result<T>::type, Args...)> process) const {
+    return parser_type([=, c=conv_fn](Iter& pos, Iter end, Args...args)->result{
+      return process(c(pos, end), args...);
+    });
+  }
+
+};
+
 
 }

@@ -34,7 +34,9 @@ const p IPv6 = ([]{
 
 const p FQDN = p{alpha + digit + cs{".-"}};
 
-const p uri_host = (p{'['} + IPv6 + p{']'} | IPv4 | FQDN);
+const p uri_host = p{'['} + IPv6 + p{']'}
+                 | IPv4
+                 | FQDN;
 
 const p uri_schema = p{!cs{":/?#"}};
 
@@ -60,7 +62,7 @@ const auto to_string_conv = [](auto pos, auto end) -> cp::converter_result<std::
 const auto to_number = p::make_converter<int>(to_number_conv);
 const auto to_string = p::make_converter<std::string>(to_string_conv);
 
-//structure for holind result of parsing
+//structure for holdind result of parsing
 
 enum class param_type {
   number,
@@ -92,8 +94,8 @@ const p UriParser(uri_info& ui) {
     // params = [param '&'?]*
 
     const p schema = uri_schema % (p{"http"} | p{"https"} | p{"ftp"}) %
-      (to_string %
-        [&](auto str) -> result
+      (to_string % // using converter of matched substring to standalone string
+        [&](auto str) // note, that if you return only one lambda, then you do not need '-> result'
         {
           return [=, &ui]{ ui.schema = str(); };
         }
@@ -101,10 +103,10 @@ const p UriParser(uri_info& ui) {
 
     const p port = decimal %
       (to_number % 
-        [&](auto port)-> result
+        [&](auto port)-> result // but if two or more possible lambdas, then '-> result' is mandatory
         { 
-          if (port) {
-            int p = port();
+          if (port) { // check that we converted parsed number successfuly
+            int p = port(); //get result of conversion
             if (p > 0 && p < 65536) { // check for valid range
               return [=, &ui]{ ui.port = p; };
             }
@@ -115,7 +117,7 @@ const p UriParser(uri_info& ui) {
 
     const p host = uri_host %
       (to_string %
-        [&](auto str) -> result
+        [&](auto str)
         {
           return[=, &ui]{ ui.authority = str(); };
         }
@@ -146,8 +148,11 @@ const p UriParser(uri_info& ui) {
     // parser with context
     using pc = p::with_context<context>;
     
-    // specialize converters for pc
-    const auto to_number_c = pc::make_converter<int>(to_number_conv);
+    // get converters for pc parser
+    // there are two ways:
+    // 1. make from other convertor
+    // 2. make from lambda
+    const auto to_number_c = pc::from_converter(to_number);
     const auto to_string_c = pc::make_converter<std::string>(to_string_conv);
     
     const pc param_var = pc{!cs{"&=;#"}} % (to_string_c %

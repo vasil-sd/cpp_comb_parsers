@@ -4,38 +4,83 @@
 #include <functional>
 #include "charset.h"
 
-// TODO think about contexted parsers
+// TODO: think about contexted parsers: combination of contexts?
 
 namespace comb_parser {
 
+
+// Parser result type, used as effect action
 using result = std::function<void(void)>;
 
 const result success{[]{}};
 const result fail;
 
-template<typename Char = char, typename Iter = const char*>
-class parser : public std::function<std::function<void(void)>(Iter& pos, Iter end)> {
+// Data converter result type
 
-    using parserFn = std::function<result(Iter& pos, Iter end)>;
+template<typename T>
+struct converter_result{
+  using type = std::function<T(void)>;
+  static const type fail;
+};
+
+template<typename T>
+const typename converter_result<T>::type converter_result<T>::fail;
+
+namespace {
+
+template<typename...Args>
+struct first_arg{
+  using type = void;
+};
+
+template<typename Ctx, typename...Args>
+struct first_arg<Ctx, Args...>{
+  using type = Ctx;
+};
+
+}
+
+template<typename Char = char, typename Iter = const char*, typename ...Args>
+class parser : public std::function<result(Iter& pos, Iter end, Args...)> {
+    
+    using parserFn = std::function<result(Iter& pos, Iter end, Args...)>;
+
     const parserFn parser_fn;
 
     parser(const parserFn& p) : parser_fn(p) { }
     parser(parserFn&& p) : parser_fn(std::move(p)) { }
 
+    template<typename, typename, typename...> friend class parser;
 public:
 
-    result operator()(Iter& pos, Iter end) const {
-      return parser_fn(pos, end);
+    template<typename Ctx>
+    using with_context = parser<Char, Iter, Ctx>;
+
+    const parser<Char, Iter> operator()(std::function<typename first_arg<Args...>::type()> context_gen) const {
+      return parser<Char, Iter>([parser_fn=parser_fn, context_gen](Iter& pos, Iter end)->result{
+        return parser_fn(pos, end, context_gen());
+      });
+    }
+
+    result operator()(Iter& pos, Iter end, Args...args) const {
+      return parser_fn(pos, end, args...);
     }
 
     static parser end() {
-      return parser{[](Iter& pos, Iter const end){
+      return parser{[](Iter& pos, Iter const end, Args...){
           return pos == end ? success : fail;
       }};
     }
 
+    template<typename T = std::tuple<Args...>>
+    parser(const parser<Char, Iter> p, T* = 0)
+      : parser_fn([=](Iter& pos, Iter end, Args...){
+          return p(pos, end);
+        })
+    { }
+
     parser(std::function<bool(Char)> matcher)
-      : parser_fn([=](Iter& pos, Iter const end){
+      : parser_fn([=](Iter& pos, Iter const end, Args...){
           auto start = pos;
           for (;pos != end && matcher(*pos); ++pos) { }
           return pos != start ? success : fail;
@@ -43,7 +88,7 @@ public:
     { }
 
     parser(const Char* arr)
-      : parser_fn([=](Iter& pos, Iter const end){
+      : parser_fn([=](Iter& pos, Iter const end, Args...){
           auto start = pos;
           auto it = arr;
           for (; *it != 0 && pos != end && *it == *pos; ++it, ++pos) { }
@@ -54,7 +99,7 @@ public:
     { }
 
     parser(Char c)
-      : parser_fn([=](Iter& pos, Iter const end){
+      : parser_fn([=](Iter& pos, Iter const end, Args...){
           if (pos == end) return fail;
           if (*pos == c) { ++pos; return success; }
           return fail;
@@ -64,12 +109,12 @@ public:
     // attach extra processor to parser, it may be an action
     // or more detailed parser
     const parser operator%(const parserFn process) const {
-      return parser([=, p = *this](Iter& pos, Iter end)->result{
+      return parser([=, p = *this](Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
-        auto r = p(pos, end);
+        auto r = p(pos, end, args...);
         if (r) {
           auto new_pos = start;
-          auto rp = process(new_pos, pos);
+          auto rp = process(new_pos, pos, args...);
           if (rp) { return [=]{r();rp();}; }
           pos = start;
         }
@@ -79,20 +124,20 @@ public:
 
     // choice (parser1 | parser2 | parser3)
     const parser operator| (const parser p2) const {
-      return parser([=, p1 = *this] (Iter& pos, Iter end)->result{
-        auto r = p1(pos, end);
+      return parser([=, p1 = *this] (Iter& pos, Iter end, Args...args)->result{
+        auto r = p1(pos, end, args...);
         if (r) return r;
-        return p2(pos, end);
+        return p2(pos, end, args...);
       });
     }
 
     // sequence parser1, parser2, parser3
     const parser operator+ (const parser p2) const {
-      return parser([=, p1 = *this] (Iter& pos, Iter end)->result{
+      return parser([=, p1 = *this] (Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
-        auto r1 = p1(pos, end);
+        auto r1 = p1(pos, end, args...);
         if (!r1) return fail;
-        auto r2 = p2(pos, end);
+        auto r2 = p2(pos, end, args...);
         if (!r2) { pos = start; return fail;}
         return [=]{r1();r2();};
       });
@@ -100,11 +145,11 @@ public:
 
     // skip parser1 >> parser2, parse parser1, then drop it and parse parser2
     const parser operator>> (const parser p2) const {
-      return parser([=, p1 = *this] (Iter& pos, Iter end)->result{
+      return parser([=, p1 = *this] (Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
-        auto r1 = p1(pos, end);
+        auto r1 = p1(pos, end, args...);
         if (!r1) return fail;
-        auto r2 = p2(pos, end);
+        auto r2 = p2(pos, end, args...);
         if (!r2) { pos = start; return fail;}
         return r2;
       });
@@ -112,12 +157,12 @@ public:
 
     // lookahead parser1 << parser2, parser1 succeeds only if parser2 returns success too
     const parser operator<< (const parser p2) const {
-      return parser([=, p1 = *this] (Iter& pos, Iter end)->result{
+      return parser([=, p1 = *this] (Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
-        auto r1 = p1(pos, end);
+        auto r1 = p1(pos, end, args...);
         if (!r1) return fail;
         auto before_p2 = pos;
-        auto r2 = p2(pos, end);
+        auto r2 = p2(pos, end, args...);
         if (!r2) { pos = start; return fail;}
         pos = before_p2;
         return r1;;
@@ -127,9 +172,9 @@ public:
     // not match, useful for look-ahaead:
     // parser1 << !parser2
     const parser operator!() const {
-      return parser([p = *this](Iter& pos, Iter end)->result{
+      return parser([p = *this](Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
-        auto r = p(pos, end);
+        auto r = p(pos, end, args...);
         if (r) { pos = start; return fail; }
         return success;
       });
@@ -137,8 +182,8 @@ public:
 
     // optional: ~parser, if parsed succefully - good, cannot parse - good too :)
     const parser operator~() const {
-      return parser([p = *this] (Iter& pos, Iter end)->result{
-        auto r = p(pos, end);
+      return parser([p = *this] (Iter& pos, Iter end, Args...args)->result{
+        auto r = p(pos, end, args...);
         if (r) return r;
         return success;
       });
@@ -149,12 +194,12 @@ public:
     //               [0..to] - exactly <to> or less, down to 0
     //               [from..to] - exactly <from> or more, but less or equal <to>
     const parser repeat(int from_times = 0, int to_times = -1) const {
-      return parser([p=*this, from_times, to_times] (Iter& pos, Iter end)->result{
+      return parser([p=*this, from_times, to_times] (Iter& pos, Iter end, Args...args)->result{
         int times = 0;
         auto start = pos;
         std::vector<result*> results;
         while(pos != end && (to_times == -1 || times <= to_times)) {
-          auto r = p(pos, end);
+          auto r = p(pos, end, args...);
           if (!r) break;
           ++times;
           results.push_back(new result{r});
@@ -174,10 +219,10 @@ public:
     }
 
     const parser somewhere() const {
-      return parser([p=*this](Iter& pos, Iter end)->result{
+      return parser([p=*this](Iter& pos, Iter end, Args...args)->result{
         auto start = pos;
         while(pos != end) {
-          auto r = p(pos, end);
+          auto r = p(pos, end, args...);
           if (r) { return r; }
           ++pos;
         }
@@ -188,7 +233,7 @@ public:
 
 private:
     template<typename T>
-    using converter_fn = std::function<T(Iter pos, Iter end)>;
+    using converter_fn = std::function<typename converter_result<T>::type(Iter pos, Iter end)>;
 
 public:
     template<typename T>
@@ -198,9 +243,9 @@ public:
       converter(converter_fn<T> c) : conv_fn(c) { }
       friend class parser;
     public:
-      const parser operator%(std::function<result(T)> process) const {
-        return parser([=, c=conv_fn](Iter& pos, Iter end)->result{
-          return process(c(pos, end));
+      const parser operator%(std::function<result(typename converter_result<T>::type, Args...)> process) const {
+        return parser([=, c=conv_fn](Iter& pos, Iter end, Args...args)->result{
+          return process(c(pos, end), args...);
         });
       }
     };

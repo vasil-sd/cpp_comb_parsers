@@ -100,7 +100,7 @@ const p UriParser(uri_info& ui) {
           return [=, &ui]{ ui.schema = str(); };
         }
       );
-
+    
     const p port = decimal %
       (to_number % 
         [&](auto port)-> result // but if two or more possible lambdas, then '-> result' is mandatory
@@ -155,7 +155,7 @@ const p UriParser(uri_info& ui) {
     const auto to_number_c = pc::from_converter(to_number);
     const auto to_string_c = pc::make_converter<std::string>(to_string_conv);
     
-    const pc param_var = pc{!cs{"&=;#"}} % (to_string_c %
+    const pc param_var = pc{p{!cs{"&=;#"}}} % (to_string_c %
       [] (auto s, auto param){
         param->name = s(); // store in context during parsing stage
         return cp::success; // return empty effect as flag of successful parsing
@@ -174,7 +174,7 @@ const p UriParser(uri_info& ui) {
         }
       );
 
-    const pc param_string = pc{!cs{"&;=#"}}
+    const pc param_string = pc{p{!cs{"&;=#"}}}
       % (to_string_c %
         [](auto str, auto param){
           param->str = str();
@@ -183,7 +183,7 @@ const p UriParser(uri_info& ui) {
         }
       );
 
-    const pc param_pair = (param_var + (pc{'='} >> (param_number | param_string))) %
+    const pc param_pair = (param_var + (pc{p{'='}} >> (param_number | param_string))) %
       [&] (auto s, auto e, auto param) {
          return [=, &ui]{ // <-here we capture param to use it in applying effects stage
             // use context
@@ -227,6 +227,7 @@ const p UriParser(uri_info& ui) {
 
     const p uri = ~(schema + p{':'}) + ~(p{"//"} >> ~authority) + ~path + ~(p{'?'} >> params) + ~(p{'#'} >> ~fragment);
     return uri;
+
 }
 
 int main(int, char**)

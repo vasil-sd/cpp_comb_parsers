@@ -38,44 +38,60 @@ template<typename Char = char, typename Iter = const char*, typename ...Args>
 class parser;
 
 template<typename Char, typename Iter, typename ...Args>
-class parser : public std::function<result(Iter& pos, Iter end)> {
-    
+class base_parser : public std::function<result(Iter& pos, Iter end, Args...)> {
 public:
-    using parserFn = std::function<result(Iter& pos, Iter end)>;
+    using parserFn = std::function<result(Iter& pos, Iter end, Args...)>;
 
 private:
     const parserFn parser_fn;
 
 public:
-
     template<typename Ctx>
-    using with_context = parser<Char, Iter, Ctx>;
+    using with_context = parser<Char, Iter, Ctx, Args...>;
 
-    explicit parser(const parserFn& p) : parser_fn(p) { }
-    explicit parser(parserFn&& p) : parser_fn(std::move(p)) { }
+    explicit base_parser(const parserFn& p) : parser_fn(p) { }
+    explicit base_parser(parserFn&& p) : parser_fn(std::move(p)) { }
 
-    parser() : parser_fn([]{ return success; }) {}
+    base_parser() : parser_fn([]{ return success; }) {}
+    base_parser(const base_parser&) = default;
 
-    parser(const parser&) = default;
-    
-    parser(std::function<bool(Char)>);
-    parser(Char c);
-    parser(const Char* arr);
+    base_parser(std::function<bool(Char)> matcher)
+      : parser_fn([=](Iter& pos, Iter end, Args...){
+          auto start = pos;
+          for (;pos != end && matcher(*pos); ++pos) { }
+          return pos != start ? success : fail;
+        }) { }
 
+    base_parser(Char c)
+      : parser_fn([=](Iter& pos, Iter end, Args...){
+          if (pos == end) return fail;
+          if (*pos == c) { ++pos; return success; }
+          return fail;
+        }) { }
 
-    result operator()(Iter& pos, Iter end) const {
-      return parser_fn(pos, end);
+    base_parser(const Char* arr)
+      : parser_fn([=](Iter& pos, Iter end, Args...){
+          auto start = pos;
+          auto it = arr;
+          for (; *it != 0 && pos != end && *it == *pos; ++it, ++pos) { }
+          if (*it == 0) { return success; }
+          pos = start;
+          return fail;
+        }) { }
+
+    result operator()(Iter& pos, Iter end, Args...args) const {
+      return parser_fn(pos, end, args...);
     }
 
-    static parser end() {
-      return parser{[](Iter& pos, Iter const end){
+    static base_parser end() {
+      return base_parser{[](Iter& pos, Iter const end, Args...){
           return pos == end ? success : fail;
       }};
     }
 
 public:
     template<typename T>
-    using converter_type = converter<T, Char, Iter>;
+    using converter_type = converter<T, Char, Iter, Args...>;
 
     template<typename T, typename L>
     static const converter_type<T> make_converter(L conv) {
@@ -86,116 +102,51 @@ public:
     static const converter_type<T> from_converter(const converter<T, Char, Iter, NewArgs...> conv) {
        return converter_type<T>{conv.conv_fn};
     }
+};
+
+template<typename Char, typename Iter, typename ...Args>
+class parser : public base_parser<Char, Iter, Args...> {
+    using base = base_parser<Char, Iter, Args...>;
+public:
+    explicit parser(const typename base::parserFn& p) : base(p) { }
+    explicit parser(typename base::parserFn&& p) : base(std::move(p)) { }
+
+    parser() = default;
+
+    parser(const parser&) = default;
+    parser(const base& p) : base(p) {}
+    
+    parser(std::function<bool(Char)> f) : base(f) {};
+    parser(Char c) : base(c) {};
+    parser(const Char* arr) : base(arr) {};
+
+    static parser end() { return parser{base::end()}; }
 };
 
 template<typename Char, typename Iter, typename Arg, typename ...Args>
-class parser<Char, Iter, Arg, Args...> : public std::function<result(Iter& pos, Iter end, Arg, Args...)> {
-
+class parser<Char, Iter, Arg, Args...> : public base_parser<Char, Iter, Arg, Args...> {
+    using base = base_parser<Char, Iter, Arg, Args...>;
 public:
-    using parserFn = std::function<result(Iter& pos, Iter end, Arg, Args...)>;
+    explicit parser(const typename base::parserFn& p) : base(p) { }
+    explicit parser(typename base::parserFn&& p) : base(std::move(p)) { }
 
-private:
-    const parserFn parser_fn;
-
-public:
-    template<typename Ctx>
-    using with_context = parser<Char, Iter, Ctx, Arg, Args...>;
-
-    explicit parser(const parserFn& p) : parser_fn(p) { }
-    explicit parser(parserFn&& p) : parser_fn(std::move(p)) { }
-
-    parser() : parser_fn([]{ return success; }) {}
+    parser() = default;
     parser(const parser&) = default;
+    parser(const base& p) : base(p) {};
 
-    parser(std::function<bool(Char)>);
-    parser(Char);
-    parser(const Char*);
+    parser(std::function<bool(Char)> f) : base(f) {};
+    parser(Char c) : base(c) {};
+    parser(const Char* arr) : base(arr) {};
 
     parser(const parser<Char, Iter, Args...> p)
-      : parser_fn([=](Iter& pos, Iter end, Arg, Args... args){
+      : base([=](Iter& pos, Iter end, Arg, Args... args){
           return p(pos, end, args...);
         }) { }
 
-    result operator()(Iter& pos, Iter end, Arg arg, Args...args) const {
-      return parser_fn(pos, end, arg, args...);
-    }
-
-    static parser end() {
-      return parser{[](Iter& pos, Iter const end, Arg, Args...){
-          return pos == end ? success : fail;
-      }};
-    }
-
-public:
-    template<typename T>
-    using converter_type = converter<T, Char, Iter, Arg, Args...>;
-
-    template<typename T, typename L>
-    static const converter_type<T> make_converter(L conv) {
-      return converter_type<T>{static_cast<typename converter_type<T>::converter_fn>(conv)};
-    }
-
-    template<typename T, typename ...NewArgs>
-    static const converter_type<T> from_converter(const converter<T, Char, Iter, NewArgs...> conv) {
-       return converter_type<T>{conv.conv_fn};
-    }
+    static parser end() { return parser{base::end()}; }
 };
 
 //========================
-// Constructors of parser
-
-namespace {
-
-template<typename Char, typename Iter>
-result parse_using_matcher(Iter& pos, const Iter end, std::function<bool(Char)> matcher) {
-    auto start = pos;
-    for (;pos != end && matcher(*pos); ++pos) { }
-    return pos != start ? success : fail;
-}
-
-template<typename Char, typename Iter>
-result parse_using_char(Iter& pos, const Iter end, Char c) {
-    if (pos == end) return fail;
-    if (*pos == c) { ++pos; return success; }
-    return fail;
-}
-
-template<typename Char, typename Iter>
-result parse_using_char_array(Iter& pos, const Iter end, const Char* arr) {
-    auto start = pos;
-    auto it = arr;
-    for (; *it != 0 && pos != end && *it == *pos; ++it, ++pos) { }
-    if (*it == 0) { return success; }
-    pos = start;
-    return fail;
-}
-
-} // namespace anonymous
-
-template<typename Char, typename Iter, typename ... Args>
-parser<Char, Iter, Args...>::parser(std::function<bool(Char)> matcher)
-  : parser_fn([=](Iter& pos, Iter end){ return parse_using_matcher(pos, end, matcher); }) { }
-
-template<typename Char, typename Iter, typename Arg, typename ... Args>
-parser<Char, Iter, Arg, Args...>::parser(std::function<bool(Char)> matcher)
-  : parser_fn([=](Iter& pos, Iter end, Arg, Args...){ return parse_using_matcher(pos, end, matcher); }) { }
-
-template<typename Char, typename Iter, typename ... Args>
-parser<Char, Iter, Args...>::parser(Char c)
-  : parser_fn([=](Iter& pos, Iter end){ return parse_using_char(pos, end, c); }) { }
-
-template<typename Char, typename Iter, typename Arg, typename ... Args>
-parser<Char, Iter, Arg, Args...>::parser(Char c)
-  : parser_fn([=](Iter& pos, Iter end, Arg, Args...){ return parse_using_char(pos, end, c); }) { }
-
-template<typename Char, typename Iter, typename ... Args>
-parser<Char, Iter, Args...>::parser(const Char* arr)
-  : parser_fn([=](Iter& pos, Iter end){ return parse_using_char_array(pos, end, arr); }) { }
-
-template<typename Char, typename Iter, typename Arg, typename ... Args>
-parser<Char, Iter, Arg, Args...>::parser(const Char* arr)
-  : parser_fn([=](Iter& pos, Iter end, Arg, Args...){ return parse_using_char_array(pos, end, arr); }) { }
-
 
 //====================================
 // Operators (combinators) for parsers
@@ -281,6 +232,7 @@ const parser<Char, Iter, Args...> operator<< (const parser<Char, Iter, Args...> 
   }};
 }
 
+// combinator 'not': !parser1 - return fail is parser1 succeeded, otherwise return success
 template<typename Char, typename Iter, typename...Args>
 const parser<Char, Iter, Args...> operator!(parser<Char, Iter, Args...> p) {
   return parser<Char, Iter, Args...>{[=](Iter& pos, Iter end, Args...args)->result{
@@ -354,7 +306,7 @@ private:
 
   converter_fn conv_fn;
   converter(converter_fn c) : conv_fn(c) { }
-  template<typename, typename, typename...> friend class parser;
+  template<typename, typename, typename...> friend class base_parser;
 
 public:
 

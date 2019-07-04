@@ -221,13 +221,13 @@ const up param_flag =
 const up param =
       up{!cs{"&#;"}}                               // high-level quick parser
     % (                                            // begin more detailed parser
-        (param_pair([](...)-> local_context {      // downlift pc to up parser by supplying context-generator (pop off innermost context)
+        (param_pair * [](...){      // downlift pc to up parser by supplying context-generator (pop off innermost context)
               return std::make_shared<param_s>();  // on every parsing attempt, new context is generated
               // you may return every time the same pointer, but
               // it will be used every same for every parsing
               // id est for every var=val parsing in every URI,
               // because this lamba is captured in internal parser closure.
-        })
+        }
        | // or
          param_flag
       )
@@ -256,7 +256,7 @@ int main(int, char**)
 
     auto stop = url.end();
 
-    const auto res = uri([&](){return &ui;})(start, stop);
+    const auto res = (uri * [&](){return &ui;})(start, stop);
     //                   ^- supply context   |
     //                                       \- supply iterators
     if (res) { // check if parsing was succesful
